@@ -9,13 +9,16 @@ import {
   CompleteHandler,
   JavaScriptInterface,
   OnCloseWindowListener,
-  Args
+  Args,
+  OnErrorMessageListener,
+  NativeMethodParam
 } from './Entity'
 import "reflect-metadata"
 import { LogUtils } from '../utils/LogUtils'
 import router from '@ohos.router'
 import { IBaseBridge, IWebViewControllerProxy } from './WebViewInterface'
 import { ToastUtils } from '../utils/ToastUtils'
+import { JSON } from '@kit.ArkTS'
 
 export class BaseBridge implements JsInterface, IBaseBridge {
 
@@ -26,19 +29,30 @@ export class BaseBridge implements JsInterface, IBaseBridge {
   private handlerMap = new Map<number, OnReturnValue>()
   private jsClosePageListener?: OnCloseWindowListener
   private interrupt = false
-  private isSupportDS2: boolean = false
+  private _isSupportDS2: boolean = false
+
+
+  private onErrorListener?: OnErrorMessageListener
 
   supportDS2(enable: boolean): void {
-    this.isSupportDS2 = enable
+    this._isSupportDS2 = enable
+  }
+
+  public get isSupportDS2(): boolean {
+    return this._isSupportDS2
   }
 
   setWebViewControllerProxy(controller: IWebViewControllerProxy){
     this.controller = controller
   }
 
+  setGlobalErrorMessageListener(listener: OnErrorMessageListener): void {
+    this.onErrorListener = listener
+  }
+
 
   javaScriptProxy(): JavaScriptProxy {
-    let list = this.isSupportDS2 ? ['call', 'returnValue'] : ['call']
+    let list = this._isSupportDS2 ? ['call', 'returnValue'] : ['call']
     return <JavaScriptProxy> {
       object: this,
       name: this.name,
@@ -65,10 +79,6 @@ export class BaseBridge implements JsInterface, IBaseBridge {
   }
 
   private isNotEmpty(val: Object): boolean {
-    // let isNotEmpty = val !== undefined && val !== null
-    // if (typeof val === 'string') {
-    //   return isNotEmpty && val.trim().length > 0
-    // }
     return !this.isEmpty(val)
   }
 
@@ -104,7 +114,7 @@ export class BaseBridge implements JsInterface, IBaseBridge {
     const method = Reflect.get(this.isNotEmpty(obj) ? obj : this, methodName);
 
     if (typeof method !== 'function') {
-      const err = `call failed: ${methodName} is not a method attribute or is not defined`
+      const err = `call failed: ${methodName} is not a method  or is not defined`
       return this.handlerError(result, err)
     }
     let async: boolean = false
@@ -116,7 +126,7 @@ export class BaseBridge implements JsInterface, IBaseBridge {
       }
       async = <boolean> Reflect.getMetadata(MetaData.ASYNC, method) ?? false
     } else {
-      const err = `call failed: native undefined ${methodName} method`
+      const err = `call failed:  【${methodName}】 method is undefined `
       return this.handlerError(result, err)
     }
 
@@ -124,7 +134,7 @@ export class BaseBridge implements JsInterface, IBaseBridge {
     async = (this.isNotEmpty(jsParam._dscbstub)) || async
     LogUtils.d(`call async: ${async}`)
     let data: string = (this.isObject(jsParam.data) ? JSON.stringify(jsParam.data) : jsParam.data) as string
-    if (this.isSupportDS2) {
+    if (this._isSupportDS2) {
       if (async) {
         let newParam = this.safeParse(JSON.stringify(jsParam))
         delete newParam._dscbstub
@@ -150,14 +160,18 @@ export class BaseBridge implements JsInterface, IBaseBridge {
       }
       try {
         let len = method.length
-        if (len === 1) {
+
+        if (len === 0) {
+          result.code = 0
+          method.call(obj)
+        } else if (len === 1) {
           result.code = 0
           method.call(obj, handler)
         } else if (len === 2) {
           result.code = 0
           method.call(obj, data, handler)
         } else {
-          const err = `call failed: native async method(${methodName}) parameter number error`
+          const err = `call failed: (${methodName}) method parameter number error`
           return this.handlerError(result, err)
         }
       } catch (e) {
@@ -170,7 +184,7 @@ export class BaseBridge implements JsInterface, IBaseBridge {
       result.data = r
     }
 
-    return this.isSupportDS2 ? result.data?.toString() : JSON.stringify(result)
+    return this._isSupportDS2 ? result.data?.toString() : JSON.stringify(result)
 
   }
 
@@ -180,6 +194,7 @@ export class BaseBridge implements JsInterface, IBaseBridge {
     LogUtils.e(err)
     // 不再弹出toast，由业务自行处理
     // ToastUtils.show(err)
+    this.onErrorListener?.(err)
     return JSON.stringify(result)
   }
 
@@ -203,6 +218,8 @@ export class BaseBridge implements JsInterface, IBaseBridge {
       data = JSON.parse(json)
     } catch (e) {
       LogUtils.e(e)
+      const msg = JSON.stringify(e)
+      this.handlerError({ errMsg: msg } as CallResult, msg)
     }
     return data
 
@@ -229,12 +246,12 @@ export class BaseBridge implements JsInterface, IBaseBridge {
     }
     let script = `(window._dsf.${method}||window.${method}).apply(window._dsf||window,${JSON.stringify(args)})`
     if (jsReturnValueHandler != null) {
-      if (this.isSupportDS2) {
+      if (this._isSupportDS2) {
         script = `${this.name}.returnValue(${callInfo.callbackId},${script})`
       }
       this.handlerMap.set(callInfo.callbackId, jsReturnValueHandler)
     }
-    if (this.isSupportDS2) {
+    if (this._isSupportDS2) {
       this.controller.runJavaScript(script)
     }else {
       const arg = JSON.stringify(callInfo)
@@ -270,7 +287,7 @@ export class BaseBridge implements JsInterface, IBaseBridge {
 
   @JavaScriptInterface(false)
   private returnValue(param: string, value?: string) {
-    if (this.isSupportDS2) {
+    if (this._isSupportDS2) {
       let id = Number.parseInt(param)
       if (id && this.handlerMap.has(id)) {
         let handler = this.handlerMap.get(id)
@@ -310,17 +327,14 @@ export class BaseBridge implements JsInterface, IBaseBridge {
       msg: string
     } = { code: -1, msg: "" };
     try {
-      const p: {
-        name: string,
-        type: 'syn' | 'asyn' | 'all'
-      } = JSON.parse(param);
+      const p = JSON.parse(param) as NativeMethodParam
       const m = this.parseNamespace(p.name)
       let methodName = m[1]
       const obj = this.controller.javaScriptNamespaceInterfaces.get(m[0])
       const method = Reflect.get(this.isNotEmpty(obj) ? obj : this, methodName);
       LogUtils.d(this + " " + methodName + " " + param  + ' ' + obj)
       if (typeof method !== 'function') {
-        const err = `call failed: ${methodName} is not a method attribute or is not defined`
+        const err = `call failed: ${methodName} is not a method  or is not defined`
         result.msg = err
       } else {
         if (this.isNotEmpty(method)) {
@@ -333,7 +347,7 @@ export class BaseBridge implements JsInterface, IBaseBridge {
             result.code = (async && p.type === 'syn') || (!async && p.type === 'asyn') ? 1 : 0
           }
         } else {
-          const err = `call failed: ${methodName} native method does not exist`
+          const err = `call failed: ${methodName} method does not exist`
           result.msg = err
         }
       }
@@ -342,7 +356,8 @@ export class BaseBridge implements JsInterface, IBaseBridge {
       result.msg = e
     }
     if (this.isNotEmpty(result.msg)) {
-       LogUtils.e(result.msg)
+      LogUtils.e(result.msg)
+      this.handlerError({ errMsg: result.msg } as CallResult, result.msg)
     }
     return result.code === 0
   }
@@ -363,7 +378,7 @@ export class BaseBridge implements JsInterface, IBaseBridge {
   }
 
   private checkIfDS2(): boolean {
-    if (this.isSupportDS2) {
+    if (this._isSupportDS2) {
       ToastUtils.show('DS2.0脚本不支持该功能，请前端引入DS3.0脚本')
       return true
     }
@@ -374,11 +389,12 @@ export class BaseBridge implements JsInterface, IBaseBridge {
     this.interrupt = true
     this.jsClosePageListener = null
     this.handlerMap.clear()
-    this.isSupportDS2 = false
+    this._isSupportDS2 = false
+    this.onErrorListener = null
   }
 
   injectDS2Js(){
-    if (this.isSupportDS2) {
+    if (this._isSupportDS2) {
       let script =
         "function getJsBridge(){window._dsf=window._dsf||{};return{call:function(b,a,c){\"function\"==typeof a&&(c=a,a={});if(\"function\"==typeof c){window.dscb=window.dscb||0;var d=\"dscb\"+window.dscb++;window[d]=c;a._dscbstub=d}a=JSON.stringify(a||{});return window._dswk?prompt(window._dswk+b,a):\"function\"==typeof _dsbridge?_dsbridge(b,a):_dsbridge.call(b,a)},register:function(b,a){\"object\"==typeof b?Object.assign(window._dsf,b):window._dsf[b]=a}}}dsBridge=getJsBridge();"
        this.controller.runJavaScript(script)

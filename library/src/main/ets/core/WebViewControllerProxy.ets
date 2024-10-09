@@ -1,6 +1,7 @@
 import webview from '@ohos.web.webview';
+import { ToastUtils } from '../utils/ToastUtils';
 import { BaseBridge } from './BaseBridge';
-import { Args, JsInterface, OnCloseWindowListener, OnReturnValue } from './Entity';
+import { Args, JsInterface, OnCloseWindowListener, OnErrorMessageListener, OnReturnValue } from './Entity';
 import { IWebViewControllerProxy, IBaseBridge } from './WebViewInterface';
 
 
@@ -18,6 +19,10 @@ export class WebViewControllerProxy implements IWebViewControllerProxy, IOhosWeb
     }
   }
 
+  setGlobalErrorMessageListener(listener: OnErrorMessageListener): void {
+    this.bridge.setGlobalErrorMessageListener(listener)
+  }
+
   supportDS2(enable: boolean): void {
     this.bridge.supportDS2(enable)
   }
@@ -29,6 +34,14 @@ export class WebViewControllerProxy implements IWebViewControllerProxy, IOhosWeb
 
   addJavascriptObject = (obj: object, namespace: string = '') => {
     if (obj != null) {
+      if (this.javaScriptNamespaceInterfaces.has(namespace)) {
+        ToastUtils.show(namespace + "注入失败：一个组件内不能同时存在两个相同的命名空间名称")
+        return
+      }
+      if (this.bridge.isSupportDS2 && namespace && namespace.length > 0) {
+        ToastUtils.show(namespace + "注入失败：DSBridge2.0不支持命名空间")
+         return
+      }
       this.javaScriptNamespaceInterfaces.set(namespace, obj)
     }
 

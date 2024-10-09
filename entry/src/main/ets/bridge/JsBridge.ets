@@ -1,5 +1,6 @@
 import { LogUtils } from '../utils/LogUtils';
 import { BaseSendable, CompleteHandler, JavaScriptInterface, taskWait } from '@hzw/ohos-dsbridge';
+import { ToastUtils } from '@hzw/ohos-dsbridge/src/main/ets/utils/ToastUtils';
 
 @Sendable
 export class Param  extends BaseSendable{
@@ -22,7 +23,21 @@ export class Param  extends BaseSendable{
     //   }
     // }
     // throw new Error("ddd")
-    this.sum =  await this.add()
+    // this.sum =  await this.add()
+    // let target = this
+    // this.sum = await new Promise<number>(async (resolve, reject) => {
+    //   let sum = this.add()
+    //   resolve(sum)
+    // })
+    this.sum = await this.addTest()
+
+  }
+
+  async addTest() :Promise<number>{
+    return  new Promise<number>(async (resolve, reject) => {
+      let sum = this.add()
+      resolve(sum)
+    })
   }
 
   async add(){
@@ -66,6 +81,12 @@ export class JsBridge {
   testNoArg(): boolean {
     LogUtils.d('testNoArg')
     return true
+  }
+
+  @JavaScriptInterface()
+  testNoArgAsync() {
+    LogUtils.d('testNoArgAsync')
+    ToastUtils.show("testNoArgAsync")
   }
 
   /**
